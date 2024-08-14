@@ -1,5 +1,6 @@
 package ai.diffy.analysis
 
+import scala.math._
 import ai.diffy.compare.{Difference, NoDifference, PrimitiveDifference}
 import ai.diffy.flat.{FlatEntry, FlatObject}
 import ai.diffy.lifter.{AnalysisRequest, JsonLifter, Message}
@@ -21,42 +22,77 @@ object DifferenceAnalyzer {
 class DifferenceAnalyzer(
     rawCounter: RawDifferenceCounter,
     noiseCounter: NoiseDifferenceCounter,
-    store: InMemoryDifferenceCollector)
-{
+    summaryCounter: SummaryDifferenceCounter,
+    store: InMemoryDifferenceCollector
+) {
   import DifferenceAnalyzer._
 
   def analyze(analysisRequest: AnalysisRequest): Option[DifferenceResult] = {
-    apply(analysisRequest.request, analysisRequest.candidate, analysisRequest.primary, analysisRequest.secondary)
+    apply(
+      analysisRequest.request,
+      analysisRequest.candidate,
+      analysisRequest.primary,
+      analysisRequest.secondary,
+      None,
+      true
+    )
+
   }
   def apply(
-    request: Message,
-    candidate: Message,
-    primary: Message,
-    secondary: Message,
-    idKnown: Option[String] = None
+      request: Message,
+      candidate: Message,
+      primary: Message,
+      secondary: Message,
+      idKnown: Option[String] = None,
+      isAnalyze: Boolean = false
   ): Option[DifferenceResult] = {
-    getEndpointName(request.endpoint, candidate.endpoint,
-        primary.endpoint, secondary.endpoint) flatMap { endpointName =>
+    getEndpointName(
+      request.endpoint,
+      candidate.endpoint,
+      primary.endpoint,
+      secondary.endpoint
+    ) flatMap { endpointName =>
       val requestDiff: Map[String, Difference] =
-        FlatObject.lift(request.result)
-          .rendered map { case FlatEntry(key, value) =>
-          s"request.$key.NoDifference" -> NoDifference(value)
+        FlatObject.lift(request.result).rendered map {
+          case FlatEntry(key, value) =>
+            s"request.$key.NoDifference" -> NoDifference(value)
         } toMap
 //      val requestDiff =
 //        Difference(request.result, request.result)
 //          .flattened map {case (k,v) => s"request.$k" -> v}
 
       val rawDiff: Map[String, Difference] = requestDiff ++
-        (Difference(primary.result, candidate.result)
-          .flattened map {case (k,v) => s"response.$k" -> v})
+        (Difference(primary.result, candidate.result).flattened map {
+          case (k, v) => s"response.$k" -> v
+        })
 
       val noiseDiff = requestDiff ++
-        (Difference(primary.result, secondary.result)
-          .flattened map {case (k,v) => s"response.$k" -> v})
+        (Difference(primary.result, secondary.result).flattened map {
+          case (k, v) => s"response.$k" -> v
+        })
 
-      val id = idKnown.getOrElse(new String(Random.alphanumeric.take(10).toArray))
+      val id =
+        idKnown.getOrElse(new String(Random.alphanumeric.take(10).toArray))
       rawCounter.counter.count(endpointName, rawDiff)
+
       noiseCounter.counter.count(endpointName, noiseDiff ++ requestDiff)
+
+      // Count the total number of requests coming in
+      if (isAnalyze) {
+        summaryCounter.counter.countOnce(endpointName, "total")
+      }
+      var hasDifferences: Boolean = false
+      rawDiff foreach {
+        case (_, diff) => {
+          if (!diff.isInstanceOf[NoDifference[_]]) {
+            hasDifferences = true
+          }
+        }
+      }
+      if (hasDifferences && isAnalyze) {
+        // Count the number of differences in the incoming request only
+        summaryCounter.counter.countOnce(endpointName, "differences")
+      }
 
       if (rawDiff.size > 0) {
         val diffResult = new DifferenceResult(
@@ -70,7 +106,8 @@ class DifferenceAnalyzer(
             JsonLifter.encode(primary.result),
             JsonLifter.encode(secondary.result),
             JsonLifter.encode(candidate.result)
-          ));
+          )
+        );
         store.create(diffResult)
         Some(diffResult)
       } else {
@@ -92,28 +129,36 @@ class DifferenceAnalyzer(
         new FieldDifference(
           field,
           JsonLifter.encode(
-            diff.toMap map {
-              case (k, v) => k -> v.toString
+            diff.toMap map { case (k, v) =>
+              k -> v.toString
             }
           )
         )
 
-      case (field, diff) => new FieldDifference(field, JsonLifter.encode(diff.toMap))
+      case (field, diff) =>
+        new FieldDifference(field, JsonLifter.encode(diff.toMap))
     }
 
   private[this] def getEndpointName(
       requestEndpoint: Option[String],
       candidateEndpoint: Option[String],
       primaryEndpoint: Option[String],
-      secondaryEndpoint: Option[String]): Option[String] = {
-    val rawEndpointName = (requestEndpoint, candidateEndpoint, primaryEndpoint, secondaryEndpoint) match {
+      secondaryEndpoint: Option[String]
+  ): Option[String] = {
+    val rawEndpointName = (
+      requestEndpoint,
+      candidateEndpoint,
+      primaryEndpoint,
+      secondaryEndpoint
+    ) match {
       case (Some(_), _, _, _) => requestEndpoint
       // undefined endpoint when action header is missing from all three instances
       case (_, None, None, None) => UndefinedEndpoint
       // the assumption is that primary and secondary should call the same endpoint,
       // otherwise it's noise and we should discard the request
-      case (_, None, _, _) if primaryEndpoint == secondaryEndpoint => primaryEndpoint
-      case (_, None, _, _) => None
+      case (_, None, _, _) if primaryEndpoint == secondaryEndpoint =>
+        primaryEndpoint
+      case (_, None, _, _)    => None
       case (_, Some(_), _, _) => candidateEndpoint
     }
 

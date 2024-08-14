@@ -26,11 +26,13 @@ trait FieldMetadata {
 
 trait DifferenceCounter {
   def count(endpoint: String, diffs: Map[String, Difference]): Unit
+  def countOnce(endpoint: String, summaryType: String): Unit
   def endpoints: Map[String, EndpointMetadata]
-  def endpoint(endpoint: String):EndpointMetadata = endpoints(endpoint)
+  def endpoint(endpoint: String): EndpointMetadata = endpoints(endpoint)
   def fields(endpoint: String): Map[String, FieldMetadata]
   def clear(): Unit
 }
 
 case class RawDifferenceCounter(counter: DifferenceCounter)
 case class NoiseDifferenceCounter(counter: DifferenceCounter)
+case class SummaryDifferenceCounter(counter: DifferenceCounter)

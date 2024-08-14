@@ -74,6 +74,7 @@ public class ReactorHttpDifferenceProxy {
         this.collector = new InMemoryDifferenceCollector();
         RawDifferenceCounter raw = RawDifferenceCounter.apply(new InMemoryDifferenceCounter("raw"));
         NoiseDifferenceCounter noise = NoiseDifferenceCounter.apply(new InMemoryDifferenceCounter("noise"));
+        SummaryDifferenceCounter summary = SummaryDifferenceCounter.apply(new InMemoryDifferenceCounter("summary"));
         this.joinedDifferences = JoinedDifferences.apply(raw,noise);
         this.responsePicker = t3 -> {
             switch (settings.responseMode()) {
@@ -107,7 +108,7 @@ public class ReactorHttpDifferenceProxy {
         ));
         analyzer = Async.common(Endpoint.from(
             "analyzerWithRepo",
-                Endpoint.from("analyzer", () -> new DifferenceAnalyzer(raw, noise, collector)::analyze),
+                Endpoint.from("analyzer", () -> new DifferenceAnalyzer(raw, noise, summary, collector)::analyze),
                 Endpoint.from("repo", () -> repository::save),
                 (BinaryOperator<AnalysisRequest,
                         AnalysisRequest, Option<DifferenceResult>,
